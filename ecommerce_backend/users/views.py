@@ -5,6 +5,7 @@ from django.contrib.auth.models import User
 from rest_framework_simplejwt.views import TokenObtainPairView
 from rest_framework_simplejwt.tokens import RefreshToken
 from .serializers import RegisterSerializer, UserSerializer
+from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
 
 # Register new user
 class RegisterView(generics.CreateAPIView):
@@ -12,9 +13,20 @@ class RegisterView(generics.CreateAPIView):
     serializer_class = RegisterSerializer
 
 
+class CustomTokenObtainPairSerializer(TokenObtainPairSerializer):
+    def validate(self, attrs):
+        # call parent class validate method to get tokens 
+        data = super().validate(attrs)
+
+        # add extra field to the response
+        data["username"] = self.user.username
+
+        return data
+
+
 # Custom login view using JWT
 class LoginView(TokenObtainPairView):
-    pass  # SimpleJWT already handles this
+    serializer_class = CustomTokenObtainPairSerializer
 
 
 # Get logged-in user profile
