@@ -1,57 +1,82 @@
-# from rest_framework import viewsets, permissions
-# from .models import Order
-# from .serializers import OrderSerializer
+from django.db import transaction
+from rest_framework import viewsets, status
+from rest_framework.response import Response
+from rest_framework.permissions import IsAuthenticated
 
-# class OrderViewSet(viewsets.ModelViewSet):
-#     queryset = Order.objects.all()
-#     serializer_class = OrderSerializer
-#     permission_classes = [permissions.IsAuthenticated]
-
-#     def perform_create(self, serializer):
-#         # Auto-assign logged-in user when order is created
-#         serializer.save(user=self.request.user)
-
-#     def get_queryset(self):
-#         # Users see only their own orders
-#         user = self.request.user
-#         if user.is_staff:
-#             return Order.objects.all()
-#         return Order.objects.filter(user=user)
-    
-# orders/views.py
-
-from rest_framework import viewsets, permissions
-from .models import Order
+from .models import Order, OrderItem
 from .serializers import OrderSerializer
+from cart.models import CartItem
 from store.models import Product
-from rest_framework.exceptions import ValidationError
 
-class OrderViewSet(viewsets.ModelViewSet):
-    queryset = Order.objects.all()
-    serializer_class = OrderSerializer
-    permission_classes = [permissions.IsAuthenticated]
 
-    def perform_create(self, serializer):
-        product = serializer.validated_data['product']
-        quantity = serializer.validated_data['quantity']
+class OrderViewSet(viewsets.ViewSet):
+    permission_classes = [IsAuthenticated]
 
-        # Calculate total price 
-        total_price = product.price * quantity
+    # GET /api/orders/ → list user orders
+    def list(self, request):
+        orders = Order.objects.filter(user=request.user).prefetch_related("items__product")
+        serializer = OrderSerializer(orders, many=True)
+        return Response(serializer.data)
 
-        # Save with correct total_price & logged-in user
-        serializer.save(user=self.request.user, total_price=total_price)
+    # GET /api/orders/<id>/ → order detail
+    def retrieve(self, request, pk=None):
+        try:
+            order = Order.objects.prefetch_related("items__product").get(id=pk, user=request.user)
+        except Order.DoesNotExist:
+            return Response({"error": "Order not found"}, status=404)
 
-    def perform_update(self, serializer):
-        product = serializer.validated_data.get('product', serializer.instance.product)
-        quantity = serializer.validated_data.get('quantity', serializer.instance.quantity)
+        serializer = OrderSerializer(order)
+        return Response(serializer.data)
 
-        total_price = product.price * quantity
+    # POST /api/orders/ → create order from cart
+    @transaction.atomic
+    def create(self, request):
+        user = request.user
+        cart_items = CartItem.objects.select_related("product").filter(user=user)
 
-        serializer.save(total_price=total_price)
+        if not cart_items.exists():
+            return Response({"error": "Cart is empty"}, status=400)
 
-    def get_queryset(self):
-        user = self.request.user
-        if user.is_staff:
-            return Order.objects.all()
-        return Order.objects.filter(user=user)
+        total_price = 0
+        order_items_data = []
 
+        # Lock all product rows to prevent race conditions
+        product_ids = [item.product.id for item in cart_items]
+        products = Product.objects.select_for_update().filter(id__in=product_ids)
+        product_map = {p.id: p for p in products}
+
+        # Validate stock and calculate total price
+        for item in cart_items:
+            product = product_map[item.product.id]
+            if item.quantity > product.stock:
+                return Response(
+                    {"error": f"Not enough stock for {product.name}. Requested {item.quantity}, available {product.stock}"},
+                    status=400,
+                )
+            total_price += product.price * item.quantity
+            order_items_data.append({
+                "product": product,
+                "quantity": item.quantity,
+                "price": product.price
+            })
+
+        # Create order
+        order = Order.objects.create(user=user, total_price=total_price)
+
+        # Create OrderItems and deduct stock
+        for data in order_items_data:
+            OrderItem.objects.create(
+                order=order,
+                product=data["product"],
+                quantity=data["quantity"],
+                price=data["price"]
+            )
+            # Deduct stock
+            data["product"].stock -= data["quantity"]
+            data["product"].save()
+
+        # Clear user's cart
+        cart_items.delete()
+
+        serializer = OrderSerializer(order)
+        return Response(serializer.data, status=status.HTTP_201_CREATED)
