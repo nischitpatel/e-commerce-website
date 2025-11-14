@@ -2,7 +2,7 @@ from django.db import transaction
 from rest_framework import viewsets, status
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
-from rest_framework.decorators import api_view, permission_classes
+from rest_framework.decorators import api_view, permission_classes, action
 from paypalrestsdk import Payment
 
 from .models import Order, OrderItem
@@ -116,9 +116,9 @@ class OrderViewSet(viewsets.ViewSet):
             "payment_url": approval_url
         }, status=201)
     
-    @api_view(["POST"])
-    @permission_classes([IsAuthenticated])
-    def capture(request):
+    @action(detail=True, methods=["post"])
+    # @permission_classes([IsAuthenticated])
+    def capture(self, request, pk = None):
         """
         Call this after user approves payment on PayPal.
         Request body should contain 'paymentId' and 'PayerID' from PayPal redirect.
