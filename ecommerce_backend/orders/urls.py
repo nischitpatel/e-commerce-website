@@ -9,6 +9,6 @@ order_capture = OrderViewSet.as_view({"post": "capture"})
 urlpatterns = [
     path("", order_list, name="order-list"),
     path("<int:pk>/", order_detail, name="order-detail"),
-    path("<int:pk>/create/", order_create, name="order-create"),
+    path("create/", order_create, name="order-create"),
     path("<int:pk>/capture/", order_capture, name="order-capture"),
 ]
