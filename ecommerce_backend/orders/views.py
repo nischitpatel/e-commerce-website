@@ -2,6 +2,8 @@ from django.db import transaction
 from rest_framework import viewsets, status
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
+from rest_framework.decorators import api_view, permission_classes
+from paypalrestsdk import Payment
 
 from .models import Order, OrderItem
 from .serializers import OrderSerializer
@@ -60,10 +62,30 @@ class OrderViewSet(viewsets.ViewSet):
                 "price": product.price
             })
 
-        # Create order
-        order = Order.objects.create(user=user, total_price=total_price)
+        # # Create order
+        # order = Order.objects.create(user=user, total_price=total_price)
 
-        # Create OrderItems and deduct stock
+        # # Create OrderItems and deduct stock
+        # for data in order_items_data:
+        #     OrderItem.objects.create(
+        #         order=order,
+        #         product=data["product"],
+        #         quantity=data["quantity"],
+        #         price=data["price"]
+        #     )
+        #     # Deduct stock
+        #     data["product"].stock -= data["quantity"]
+        #     data["product"].save()
+
+        # # Clear user's cart
+        # cart_items.delete()
+
+        # serializer = OrderSerializer(order)
+        # return Response(serializer.data, status=status.HTTP_201_CREATED)
+    
+        # 1. Create Order and OrderItems, but DO NOT deduct stock yet
+        order = Order.objects.create(user=user, total_price=total_price, status="PENDING")
+
         for data in order_items_data:
             OrderItem.objects.create(
                 order=order,
@@ -71,12 +93,25 @@ class OrderViewSet(viewsets.ViewSet):
                 quantity=data["quantity"],
                 price=data["price"]
             )
-            # Deduct stock
-            data["product"].stock -= data["quantity"]
-            data["product"].save()
 
-        # Clear user's cart
+        # Cart is cleared
         cart_items.delete()
 
-        serializer = OrderSerializer(order)
-        return Response(serializer.data, status=status.HTTP_201_CREATED)
+        # 2. Create PayPal payment
+        from .paypal import create_payment
+
+        try:
+            payment = create_payment(order)
+            # Extract redirect URL for frontend
+            for link in payment.links:
+                if link.rel == "approval_url":
+                    approval_url = str(link.href)
+                    break
+        except Exception as e:
+            return Response({"error": "Payment creation failed", "details": str(e)}, status=500)
+
+        return Response({
+            "order_id": order.id,
+            "total_price": order.total_price,
+            "payment_url": approval_url
+        }, status=201)
