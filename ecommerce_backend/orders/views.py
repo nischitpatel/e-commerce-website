@@ -115,3 +115,46 @@ class OrderViewSet(viewsets.ViewSet):
             "total_price": order.total_price,
             "payment_url": approval_url
         }, status=201)
+    
+    @api_view(["POST"])
+    @permission_classes([IsAuthenticated])
+    def paypal_execute(request):
+        """
+        Call this after user approves payment on PayPal.
+        Request body should contain 'paymentId' and 'PayerID' from PayPal redirect.
+        """
+        payment_id = request.data.get("paymentId")
+        payer_id = request.data.get("PayerID")
+        order_id = request.data.get("order_id")
+
+        if not all([payment_id, payer_id, order_id]):
+            return Response({"error": "Missing parameters"}, status=400)
+
+        # Fetch payment from PayPal
+        payment = Payment.find(payment_id)
+
+        if payment.execute({"payer_id": payer_id}):
+            # Payment successful → mark order as PAID and deduct stock
+            from .models import Order
+            try:
+                with transaction.atomic():
+                    order = Order.objects.select_for_update().get(id=order_id, user=request.user)
+                    if order.status == "PAID":
+                        return Response({"message": "Order already paid"}, status=200)
+
+                    # Deduct stock for each OrderItem
+                    for item in order.items.select_related("product").all():
+                        product = item.product
+                        if item.quantity > product.stock:
+                            return Response({"error": f"Not enough stock for {product.name}"}, status=400)
+                        product.stock -= item.quantity
+                        product.save()
+
+                    order.status = "PAID"
+                    order.save()
+            except Order.DoesNotExist:
+                return Response({"error": "Order not found"}, status=404)
+
+            return Response({"message": "Payment successful", "order_id": order.id})
+        else:
+            return Response({"error": payment.error}, status=400)
