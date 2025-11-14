@@ -118,7 +118,7 @@ class OrderViewSet(viewsets.ViewSet):
     
     @api_view(["POST"])
     @permission_classes([IsAuthenticated])
-    def paypal_execute(request):
+    def capture(request):
         """
         Call this after user approves payment on PayPal.
         Request body should contain 'paymentId' and 'PayerID' from PayPal redirect.
