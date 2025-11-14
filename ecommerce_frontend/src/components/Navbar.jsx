@@ -14,7 +14,7 @@ export default function Navbar() {
         <Link to="/cart">Cart ({cart.length})</Link>
         {user ? (
           <>
-            <span>Hello, {user.name}</span>
+            <span>Hello, {localStorage.user}</span>
             <button onClick={logout} className="ml-2 bg-red-600 py-1 px-3 rounded hover:bg-red-700">Logout</button>
           </>
         ) : (
